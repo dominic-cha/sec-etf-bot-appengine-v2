@@ -1,0 +1,17 @@
+runtime: python39
+
+# 환경변수 설정 (실제 값으로 교체하세요!)
+env_variables:
+  BOT_TOKEN: "8402864290:AAH_oGrMj-gyVnC4Ss2ax0lDkzGO7DZ_ykE"
+  CHAT_ID: "44705783"
+
+# 인스턴스 설정
+automatic_scaling:
+  min_instances: 1
+  max_instances: 1
+  target_cpu_utilization: 0.6
+
+# 리소스 설정
+resources:
+  cpu: 1
+  memory_gb: 0.5

@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 환경 파일
+.env
+*.log
+
+# IDE
+.vscode/
+.idea/
