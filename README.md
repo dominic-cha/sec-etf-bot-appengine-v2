@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 \# SEC ETF Bot - Google App Engine
 
 
@@ -7,6 +8,8 @@
 
 
 \## 🚀 자동 배포
+
+\- 자동 배포 테스트 - 2025-08-21
 
 \- GitHub에 코드 푸시 시 자동으로 Google App Engine에 배포
 
@@ -44,3 +47,7 @@
 
 \- 웹 기반 관리 인터페이스
 
+=======
+# sec-etf-bot-appengine-v2
+Google App Engine SEC ETF Bot with Auto Deploy
+>>>>>>> 38860944805f3cc231aab94089167a156c20e416
