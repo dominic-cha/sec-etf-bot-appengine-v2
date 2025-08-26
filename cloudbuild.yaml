@@ -1,10 +1,10 @@
 steps:
-  # App Engine에 자동 배포
+  # App Engine에 배포
   - name: 'gcr.io/cloud-builders/gcloud'
     args: ['app', 'deploy', '--quiet']
+  
+  # 배포 완료 후 테스트 메시지 전송
+  - name: 'gcr.io/cloud-builders/curl'
+    args: ['https://sec-etf-bot.du.r.appspot.com/deploy-test']
 
 timeout: '1200s'
-
-# 배포 완료 후 알림 (선택사항)
-options:
-  logging: CLOUD_LOGGING_ONLY
