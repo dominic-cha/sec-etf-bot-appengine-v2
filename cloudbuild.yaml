@@ -8,3 +8,7 @@ steps:
     args: ['https://sec-etf-bot.du.r.appspot.com/deploy-test']
 
 timeout: '1200s'
+
+# 로깅 설정 추가
+options:
+  logging: CLOUD_LOGGING_ONLY
