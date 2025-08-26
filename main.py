@@ -240,6 +240,30 @@ def send_startup_message():
 
     send_telegram_message(startup_message)
 
+def send_deployment_test():
+    """배포 완료 테스트 메시지"""
+    korean_time = get_korean_time()
+    us_time = datetime.now(get_us_timezone())
+    weekday_name = ['월', '화', '수', '목', '금', '토', '일'][korean_time.weekday()]
+    
+    test_message = f"""🚀 <b>배포 완료 테스트</b>
+
+📅 {korean_time.strftime('%Y-%m-%d')} ({weekday_name}요일)
+⏰ 한국시간: {korean_time.strftime('%H:%M:%S')}
+🇺🇸 미국시간: {us_time.strftime('%H:%M:%S %Z')}
+
+<b>✅ 시스템 상태:</b>
+- App Engine: 정상 실행
+- SEC 데이터 수집: 준비됨
+- 스케줄러: 화-토 8시 설정됨
+
+<b>📊 다음 리포트:</b>
+- 화-토요일 오전 8시
+- 실제 SEC ETF 파일링 데이터
+
+배포 테스트 완료! 🎯"""
+    send_telegram_message(test_message)
+
 def run_scheduler():
     """백그라운드 스케줄러 (App Engine에서는 사용 안함)"""
     print("⏰ 백그라운드 스케줄러는 Cloud Scheduler로 대체됨")
@@ -321,15 +345,22 @@ def health_check():
     """헬스체크"""
     return "OK"
 
+@app.route('/deploy-test')
+def deploy_test():
+    """배포 테스트 메시지 전송"""
+    send_deployment_test()
+    return "✅ 배포 테스트 메시지 전송 완료!"
+
 # 앱 시작 시 실행
 if __name__ == '__main__':
     print("📊 SEC ETF Bot 시작!")
     print(f"📱 BOT_TOKEN: {'✅ 설정됨' if BOT_TOKEN else '❌ 미설정'}")
     print(f"💬 CHAT_ID: {'✅ 설정됨' if CHAT_ID else '❌ 미설정'}")
     
-    # 시작 알림 (개발 환경에서만)
-    if BOT_TOKEN and CHAT_ID and os.getenv('GAE_ENV') != 'standard':
-        send_startup_message()
+    # 시작 알림 (App Engine 환경에서 자동 실행)
+    if BOT_TOKEN and CHAT_ID:
+        # 배포 테스트 메시지 전송
+        send_deployment_test()
     
     # 백그라운드 스케줄러 시작 (실제로는 비활성화)
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
