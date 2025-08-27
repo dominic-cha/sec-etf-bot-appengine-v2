@@ -64,98 +64,92 @@ def send_telegram_message(message):
         print(f"🚨 텔레그램 오류: {e}")
         return False
 
-def get_sec_etf_filings():
-    """SEC ETF 파일링 데이터 수집"""
+def get_sec_etf_new_filings():
+    """SEC ETF 신규 등록 신청만 수집"""
     try:
-        # SEC EDGAR API 엔드포인트
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         
-        # 최근 ETF 관련 파일링 검색
-        # N-1A (ETF 등록신청서), 485BPOS (사후 등록서류) 등
+        # SEC EDGAR API - 신규 ETF 등록 신청 검색
         search_url = "https://efts.sec.gov/LATEST/search-index"
-        
-        # 백업: SEC RSS 피드 사용
         rss_url = "https://www.sec.gov/Archives/edgar/xbrlrss.xml"
         
-        etf_filings = []
+        new_etf_filings = []
         
         try:
-            # SEC 공식 검색 API 시도
-            search_response = requests.get(search_url, headers=headers, timeout=10)
-            if search_response.status_code == 200:
-                # ETF 관련 키워드 필터링
-                etf_keywords = ['ETF', 'Exchange-Traded Fund', 'Exchange Traded Fund']
-                # JSON 파싱 및 ETF 관련 데이터 추출 (실제 API 구조에 따라 조정 필요)
-        except:
-            pass
-        
-        # 백업 방법: SEC RSS 피드 파싱
-        try:
+            # SEC RSS 피드에서 신규 등록 신청만 필터링
             rss_response = requests.get(rss_url, headers=headers, timeout=10)
             if rss_response.status_code == 200:
-                # RSS XML 파싱하여 ETF 관련 항목 추출
                 import xml.etree.ElementTree as ET
                 root = ET.fromstring(rss_response.content)
                 
-                for item in root.findall('.//item')[:10]:  # 최근 10개 항목
+                # 신규 ETF 등록 관련 키워드
+                new_filing_keywords = [
+                    'n-1a', 'form n-1a', 'registration statement',
+                    'new etf', 'initial registration'
+                ]
+                
+                for item in root.findall('.//item')[:20]:  # 최근 20개 검토
                     title = item.find('title')
                     link = item.find('link')
                     pub_date = item.find('pubDate')
                     
-                    if title is not None and any(keyword.lower() in title.text.lower() for keyword in ['etf', 'exchange-traded', 'exchange traded']):
-                        etf_filings.append({
-                            'title': title.text,
-                            'link': link.text if link is not None else '',
-                            'date': pub_date.text if pub_date is not None else ''
-                        })
+                    if title is not None:
+                        title_lower = title.text.lower()
+                        
+                        # ETF 관련이면서 신규 등록 신청인지 확인
+                        is_etf = any(keyword in title_lower for keyword in ['etf', 'exchange-traded', 'exchange traded'])
+                        is_new_filing = any(keyword in title_lower for keyword in new_filing_keywords)
+                        
+                        if is_etf and is_new_filing:
+                            new_etf_filings.append({
+                                'title': title.text,
+                                'link': link.text if link is not None else '',
+                                'date': pub_date.text if pub_date is not None else ''
+                            })
+                            
         except Exception as e:
             print(f"RSS 파싱 오류: {e}")
         
-        # 데모 데이터 (실제 API 연결 전 테스트용)
-        if not etf_filings:
+        # 데모 데이터 (신규 등록 신청만)
+        if not new_etf_filings:
             korean_time = get_korean_time()
             us_time = datetime.now(get_us_timezone())
             
-            etf_filings = [
+            new_etf_filings = [
                 {
-                    'title': 'Vanguard S&P 500 ETF - Form N-Q Filing',
-                    'ticker': 'VOO',
-                    'type': 'Quarterly Holdings Report',
+                    'title': 'Ark Innovation ETF - Form N-1A Initial Registration Statement',
+                    'ticker': 'ARKK',
+                    'type': '신규 ETF 등록신청',
+                    'strategy': '혁신 기술 기업 투자',
                     'date': us_time.strftime('%Y-%m-%d'),
                     'link': 'https://www.sec.gov/Archives/edgar/data/example1.html'
                 },
                 {
-                    'title': 'iShares Core MSCI Total International Stock ETF - Registration',
-                    'ticker': 'IXUS',
-                    'type': 'Registration Statement',
+                    'title': 'Global Clean Energy ETF - Registration Statement',
+                    'ticker': 'GCLN', 
+                    'type': '신규 ETF 등록신청',
+                    'strategy': '글로벌 청정에너지',
                     'date': (us_time - timedelta(days=1)).strftime('%Y-%m-%d'),
                     'link': 'https://www.sec.gov/Archives/edgar/data/example2.html'
-                },
-                {
-                    'title': 'SPDR Gold Shares ETF - Amendment Filing',
-                    'ticker': 'GLD',
-                    'type': 'Amendment to Registration',
-                    'date': (us_time - timedelta(days=2)).strftime('%Y-%m-%d'),
-                    'link': 'https://www.sec.gov/Archives/edgar/data/example3.html'
                 }
             ]
             
-        return etf_filings
+        return new_etf_filings
         
     except Exception as e:
-        print(f"SEC 데이터 수집 오류: {e}")
+        print(f"SEC 신규 등록 데이터 수집 오류: {e}")
         return []
 
-def format_etf_report(filings):
-    """ETF 파일링 리포트 포맷"""
+def format_new_etf_report(filings):
+    """신규 ETF 등록 리포트 포맷"""
     korean_time = get_korean_time()
     us_time = datetime.now(get_us_timezone())
     weekday_names = ['월', '화', '수', '목', '금', '토', '일']
     weekday = weekday_names[korean_time.weekday()]
     
-    report = f"""📊 <b>SEC ETF 파일링 일일 브리핑</b>
+    report = f"""📋 SEC 신규 ETF 등록신청 브리핑
 
 📅 {korean_time.strftime('%Y년 %m월 %d일')} ({weekday}요일)
 ⏰ 한국시간: {korean_time.strftime('%H:%M:%S')}
@@ -166,51 +160,53 @@ def format_etf_report(filings):
 """
 
     if filings:
-        report += f"<b>📋 최근 ETF 등록/신청 현황 ({len(filings)}건)</b>\n\n"
+        report += f"🆕 새로운 ETF 등록신청 ({len(filings)}건)\n\n"
         
         for i, filing in enumerate(filings, 1):
-            report += f"<b>{i}. {filing.get('ticker', 'N/A')}</b>\n"
-            report += f"📑 {filing['title'][:80]}{'...' if len(filing['title']) > 80 else ''}\n"
-            report += f"📂 유형: {filing.get('type', '일반 파일링')}\n"
-            report += f"📆 제출일: {filing.get('date', 'N/A')}\n"
+            report += f"{i}. {filing.get('ticker', 'TBD')}\n"
+            report += f"📑 {filing['title'][:70]}{'...' if len(filing['title']) > 70 else ''}\n"
+            report += f"🎯 투자전략: {filing.get('strategy', '미공개')}\n"
+            report += f"📆 신청일: {filing.get('date', 'N/A')}\n"
             if filing.get('link'):
-                report += f"🔗 <a href='{filing['link']}'>상세보기</a>\n"
+                report += f"🔗 상세보기\n"
             report += "\n"
     else:
-        report += "<b>📭 오늘은 새로운 ETF 파일링이 없습니다.</b>\n\n"
+        report += "📭 오늘은 새로운 ETF 등록신청이 없습니다.\n\n"
         report += "• 미국 시장 휴일이거나\n"
-        report += "• 아직 새로운 등록신청이 제출되지 않았을 수 있습니다.\n\n"
+        report += "• 아직 신규 ETF 등록신청이 제출되지 않았습니다.\n\n"
     
     report += "───────────────────────────\n\n"
-    report += "<b>💡 ETF 파일링 정보</b>\n"
-    report += "• <b>Form N-1A</b>: 새로운 ETF 등록신청\n"
-    report += "• <b>Form 485BPOS</b>: 등록서류 사후 개정\n" 
-    report += "• <b>Form N-Q</b>: 분기별 보유종목 현황\n"
-    report += "• <b>Form N-CSR</b>: 연간/반기 보고서\n\n"
+    report += "💡 신규 ETF 등록신청 정보\n"
+    report += "• Form N-1A: 새로운 ETF 최초 등록신청\n"
+    report += "• Registration Statement: 신규 펀드 설립 신청\n"
+    report += "• Initial Filing: 운용사의 새로운 ETF 출시 계획\n\n"
     
-    report += "🤖 <i>Google App Engine에서 자동 수집</i>"
+    report += "🔍 기존 ETF의 변경사항이나 정기보고서는 제외\n"
+    report += "📈 투자 기회 발굴을 위한 신규 상품 모니터링\n\n"
+    
+    report += "🤖 Google App Engine 자동 수집"
     
     return report
 
-def run_daily_etf_report():
-    """일일 ETF 리포트 실행"""
+def run_new_etf_report():
+    """신규 ETF 등록 리포트 실행"""
     korean_time = get_korean_time()
     
-    print(f"📊 {korean_time.strftime('%Y-%m-%d %H:%M:%S')} ETF 리포트 생성 시작")
+    print(f"📋 {korean_time.strftime('%Y-%m-%d %H:%M:%S')} 신규 ETF 등록 리포트 생성 시작")
     
-    # SEC 데이터 수집
-    filings = get_sec_etf_filings()
+    # SEC 신규 등록 데이터 수집
+    filings = get_sec_etf_new_filings()
     
     # 리포트 생성
-    report = format_etf_report(filings)
+    report = format_new_etf_report(filings)
     
     # 텔레그램 전송
     success = send_telegram_message(report)
     
     if success:
-        print(f"✅ ETF 리포트 전송 완료 - {len(filings)}건의 파일링")
+        print(f"✅ 신규 ETF 등록 리포트 전송 완료 - {len(filings)}건")
     else:
-        print("❌ ETF 리포트 전송 실패")
+        print("❌ 신규 ETF 등록 리포트 전송 실패")
 
 def send_startup_message():
     """시작 메시지"""
@@ -277,38 +273,17 @@ def run_scheduler():
         time.sleep(300)  # 5분마다 체크 (실제로는 아무것도 안 함)
 
 # Flask 라우트들
-@app.route('/')
-def hello():
-    """메인 페이지"""
-    korean_time = get_korean_time()
-    us_time = datetime.now(get_us_timezone())
-    
-    return f"""
-    <h1>📊 SEC ETF Bot - 실시간 모니터링</h1>
-    <p><strong>한국시간:</strong> {korean_time.strftime('%Y-%m-%d %H:%M:%S')} (KST)</p>
-    <p><strong>미국시간:</strong> {us_time.strftime('%Y-%m-%d %H:%M:%S %Z')}</p>
-    <p><strong>BOT_TOKEN:</strong> {'✅ 설정됨' if BOT_TOKEN else '❌ 미설정'}</p>
-    <p><strong>CHAT_ID:</strong> {'✅ 설정됨' if CHAT_ID else '❌ 미설정'}</p>
-    <p><strong>상태:</strong> 🟢 정상 작동 중</p>
-    <hr>
-    <p>🤖 SEC ETF 파일링 자동 모니터링</p>
-    <p>📅 화-토요일 오전 8시 리포트 발송</p>
-    <p><a href="/etf-report">📊 ETF 리포트 보기</a></p>
-    <p><a href="/test-report">🧪 리포트 테스트</a></p>
-    <p><a href="/startup">🚀 시작 메시지</a></p>
-    """
-
 @app.route('/etf-report')
 def etf_report():
-    """ETF 리포트 수동 실행"""
-    run_daily_etf_report()
-    return "✅ SEC ETF 리포트 전송 완료!"
+    """신규 ETF 등록 리포트 수동 실행"""
+    run_new_etf_report()
+    return "✅ SEC 신규 ETF 등록 리포트 전송 완료!"
 
 @app.route('/test-report')
 def test_report():
-    """리포트 테스트 (전송하지 않고 미리보기)"""
-    filings = get_sec_etf_filings()
-    report = format_etf_report(filings)
+    """신규 ETF 리포트 테스트 (전송하지 않고 미리보기)"""
+    filings = get_sec_etf_new_filings()
+    report = format_new_etf_report(filings)
     
     # HTML로 변환해서 웹페이지에 표시
     html_report = report.replace('<b>', '<strong>').replace('</b>', '</strong>')
@@ -317,9 +292,9 @@ def test_report():
     
     return f"""
     <html>
-    <head><title>SEC ETF 리포트 미리보기</title></head>
+    <head><title>신규 ETF 등록 리포트 미리보기</title></head>
     <body style="font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; line-height: 1.6;">
-    <h2>📊 SEC ETF 리포트 미리보기</h2>
+    <h2>📋 신규 ETF 등록 리포트 미리보기</h2>
     <div style="background: #f5f5f5; padding: 20px; border-radius: 10px; white-space: pre-line;">
     {html_report}
     </div>
@@ -328,28 +303,11 @@ def test_report():
     </html>
     """
 
-@app.route('/startup')
-def send_startup():
-    """시작 메시지 수동 전송"""
-    send_startup_message()
-    return "✅ 시작 메시지 전송 완료!"
-
 @app.route('/test')
 def manual_test():
-    """기존 호환성을 위한 테스트 (실제로는 ETF 리포트 실행)"""
-    run_daily_etf_report()
-    return "✅ SEC ETF 리포트 전송 완료!"
-
-@app.route('/health')
-def health_check():
-    """헬스체크"""
-    return "OK"
-
-@app.route('/deploy-test')
-def deploy_test():
-    """배포 테스트 메시지 전송"""
-    send_deployment_test()
-    return "✅ 배포 테스트 메시지 전송 완료!"
+    """기존 호환성을 위한 테스트 (신규 ETF 등록 리포트 실행)"""
+    run_new_etf_report()
+    return "✅ SEC 신규 ETF 등록 리포트 전송 완료!"
 
 # 앱 시작 시 실행
 if __name__ == '__main__':
