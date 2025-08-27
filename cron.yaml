@@ -1,0 +1,8 @@
+cron:
+- description: "SEC ETF daily report"
+  url: /cron/daily-report
+  schedule: every day 08:00
+  timezone: Asia/Seoul
+  retry_parameters:
+    min_backoff_seconds: 10
+    max_doublings: 5
