@@ -5,5 +5,19 @@ env_variables:
   CHAT_ID: "44705783"
 
 handlers:
+- url: /etf-report
+  script: auto
+  secure: always
+  
 - url: /.*
   script: auto
+
+# 자동 스케일링 설정
+automatic_scaling:
+  min_instances: 0
+  max_instances: 2
+  min_idle_instances: 0
+  max_idle_instances: 1
+  min_pending_latency: 30ms
+  max_pending_latency: automatic
+  max_concurrent_requests: 10
