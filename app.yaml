@@ -1,8 +1,8 @@
 runtime: python39
 
 env_variables:
-  BOT_TOKEN: "여기에_실제_봇_토큰"
-  CHAT_ID: "여기에_실제_채팅_ID"
+  BOT_TOKEN: "8402864290:AAH_oGrMj-gyVnC4Ss2ax0lDkzGO7DZ_ykE"
+  CHAT_ID: "44705783"
 
 handlers:
 - url: /.*
