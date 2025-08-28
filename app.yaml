@@ -1,10 +1,9 @@
 runtime: python39
-entrypoint: gunicorn -b :$PORT main:app
 
 env_variables:
-  BOT_TOKEN: "your-bot-token"
-  CHAT_ID: "your-chat-id"
+  BOT_TOKEN: "여기에_실제_봇_토큰"
+  CHAT_ID: "여기에_실제_채팅_ID"
 
-automatic_scaling:
-  min_instances: 0
-  max_instances: 2
+handlers:
+- url: /.*
+  script: auto
