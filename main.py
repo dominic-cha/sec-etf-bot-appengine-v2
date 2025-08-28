@@ -65,24 +65,60 @@ def send_telegram_message(message):
         logger.error(f"❌ 예상치 못한 오류: {str(e)}")
         return {"status": "error", "message": f"예상치 못한 오류: {str(e)}"}
 
+def fetch_filing_detail(url):
+    """Filing 상세 페이지에서 ETF 이름 추출"""
+    try:
+        headers = {
+            'User-Agent': 'SEC ETF Monitor Bot/1.0 (Contact: monitor@example.com)'
+        }
+        
+        # Filing 페이지 가져오기
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return None
+        
+        content = response.text
+        
+        # ETF 이름 패턴 찾기 (여러 패턴 시도)
+        patterns = [
+            # Tuttle Capital Ethereum Income Blast ETF 같은 패턴
+            r'<b>([^<]+(?:ETF|Exchange[- ]Traded Fund?))</b>',
+            r'Name of Fund[:\s]*([^<\n]+(?:ETF|Exchange[- ]Traded Fund?))',
+            r'Series Name[:\s]*([^<\n]+(?:ETF|Exchange[- ]Traded Fund?))',
+            r'>([^<]+(?:ETF|Exchange[- ]Traded Fund?))</(?:b|strong)>',
+            # 제목에서 찾기
+            r'<title>([^<]+(?:ETF|Exchange[- ]Traded Fund?))[^<]*</title>',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, content, re.IGNORECASE)
+            if match:
+                etf_name = match.group(1).strip()
+                # HTML 엔티티 제거
+                etf_name = unescape(etf_name)
+                # 불필요한 문자 제거
+                etf_name = re.sub(r'\s+', ' ', etf_name)
+                etf_name = re.sub(r'^\W+|\W+$', '', etf_name)
+                if etf_name and 'ETF' in etf_name.upper():
+                    return etf_name
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Filing 상세 페이지 가져오기 실패: {str(e)}")
+        return None
+
 def get_all_etf_filings():
     """SEC에서 모든 ETF 관련 신규 상장신청 가져오기"""
     all_filings = []
     
-    # 1. N-1A Form (신규 펀드 등록)
-    n1a_filings = get_filings_by_form("N-1A")
-    all_filings.extend(n1a_filings)
-    logger.info(f"N-1A: {len(n1a_filings)}개")
+    # Form 타입별 수집
+    form_types = ["N-1A", "485APOS", "485BXT", "497"]
     
-    # 2. 485APOS Form (신규 ETF 클래스 추가)
-    apos_filings = get_filings_by_form("485APOS")
-    all_filings.extend(apos_filings)
-    logger.info(f"485APOS: {len(apos_filings)}개")
-    
-    # 3. 485BXT Form (ETF 신규 시리즈)
-    bxt_filings = get_filings_by_form("485BXT")
-    all_filings.extend(bxt_filings)
-    logger.info(f"485BXT: {len(bxt_filings)}개")
+    for form_type in form_types:
+        filings = get_filings_by_form(form_type)
+        all_filings.extend(filings)
+        logger.info(f"{form_type}: {len(filings)}개 수집")
     
     # 중복 제거
     unique_filings = []
@@ -108,21 +144,17 @@ def get_filings_by_form(form_type):
             'Accept': 'application/atom+xml,application/xml'
         }
         
-        logger.info(f"{form_type} RSS 피드 요청 중...")
         response = requests.get(rss_url, headers=headers, timeout=15)
         
         if response.status_code != 200:
-            logger.error(f"{form_type} RSS 접근 실패: {response.status_code}")
             return []
         
         # XML 파싱
         try:
             root = ET.fromstring(response.content)
-        except ET.ParseError as e:
-            logger.error(f"XML 파싱 오류: {e}")
+        except ET.ParseError:
             return []
         
-        # Namespace 정의
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
         
         filings = []
@@ -130,7 +162,7 @@ def get_filings_by_form(form_type):
         
         yesterday, today = get_date_range()
         
-        for entry in entries:
+        for entry in entries[:20]:  # 최근 20개만 처리
             try:
                 # 기본 정보 추출
                 title_elem = entry.find('atom:title', ns)
@@ -138,7 +170,7 @@ def get_filings_by_form(form_type):
                 link_elem = entry.find('atom:link', ns)
                 updated_elem = entry.find('atom:updated', ns)
                 
-                if title_elem is None or link_elem is None:
+                if not all([title_elem, link_elem]):
                     continue
                 
                 title = unescape(title_elem.text or "")
@@ -146,44 +178,92 @@ def get_filings_by_form(form_type):
                 link = link_elem.get('href', "")
                 updated = updated_elem.text if updated_elem is not None else ""
                 
-                # 날짜 추출
+                # 날짜 필터
                 filing_date = updated[:10] if updated else ""
-                
-                # 날짜 필터 (어제 또는 오늘)
                 if not filing_date or (filing_date != yesterday and filing_date != today):
                     continue
                 
-                # ETF 키워드 체크
+                # ETF 관련 여부 체크
                 combined_text = (title + " " + summary).lower()
-                etf_indicators = ['etf', 'exchange-traded', 'exchange traded', 'index fund']
+                etf_indicators = ['etf', 'exchange-traded', 'exchange traded']
                 
                 if not any(indicator in combined_text for indicator in etf_indicators):
                     continue
                 
-                # Amendment 제외 (/A로 끝나는 것)
-                if form_type == "N-1A" and "/A" in title:
+                # Amendment 제외
+                if "/A" in title and form_type in ["N-1A", "485APOS"]:
                     continue
                 
-                # 제외 키워드 체크
-                exclude_keywords = ['withdrawal', 'termination', 'liquidation', 'merger', 'delisting']
+                # 제외 키워드
+                exclude_keywords = ['withdrawal', 'termination', 'liquidation', 'merger', 'delisting', 'notice of effectiveness']
                 if any(word in combined_text for word in exclude_keywords):
                     continue
                 
-                # 회사명과 ETF 이름 추출
-                company_name, etf_name = parse_filing_title(title, summary)
+                # ETF 이름 추출 - 여러 방법 시도
+                etf_name = None
                 
-                # 디버깅 로그
-                logger.info(f"발견: {company_name} - {etf_name} ({form_type})")
+                # 방법 1: Summary에서 ETF 이름 찾기
+                if summary:
+                    # "Series Name: Tuttle Capital Ethereum Income Blast ETF" 패턴
+                    series_match = re.search(r'Series Name[:\s]*([^,\n]+(?:ETF|Exchange[- ]Traded Fund?))', summary, re.IGNORECASE)
+                    if series_match:
+                        etf_name = series_match.group(1).strip()
+                    
+                    # 일반 ETF 이름 패턴
+                    if not etf_name:
+                        etf_match = re.search(r'([A-Z][A-Za-z0-9\s&\-\.]+(?:ETF|Exchange[- ]Traded Fund?))', summary)
+                        if etf_match:
+                            etf_name = etf_match.group(1).strip()
                 
-                filing = {
-                    "company": company_name,
-                    "etf_name": etf_name,
-                    "filing_type": form_type,
-                    "filing_date": filing_date,
-                    "url": link,
-                    "raw_title": title[:100]  # 디버깅용
-                }
-                filings.append(filing)
+                # 방법 2: Title에서 추출
+                if not etf_name:
+                    # CIK 번호와 (Filer) 제거
+                    clean_title = re.sub(r'\(\d{10}\)', '', title)  # CIK 제거
+                    clean_title = re.sub(r'\(Filer\)', '', clean_title)  # Filer 제거
+                    clean_title = re.sub(r'\s*[-–—]\s*', ' - ', clean_title)  # 대시 정규화
+                    
+                    # 회사명과 ETF 이름 분리
+                    parts = clean_title.split(' - ')
+                    
+                    # ETF 이름 찾기
+                    for part in parts:
+                        if 'etf' in part.lower() and 'form' not in part.lower():
+                            etf_name = part.strip()
+                            break
+                    
+                    # 못 찾았으면 첫 번째 부분 사용
+                    if not etf_name and len(parts) > 0:
+                        potential_name = parts[0].strip()
+                        # Form 타입 제거
+                        potential_name = re.sub(r'Form\s+[\w/]+', '', potential_name, flags=re.IGNORECASE).strip()
+                        if 'etf' in potential_name.lower():
+                            etf_name = potential_name
+                
+                # 방법 3: 상세 페이지에서 추출 (느릴 수 있음 - 선택적)
+                if not etf_name and len(filings) < 5:  # 처음 5개만
+                    fetched_name = fetch_filing_detail(link)
+                    if fetched_name:
+                        etf_name = fetched_name
+                
+                # ETF 이름 정리
+                if etf_name:
+                    etf_name = re.sub(r'\s+', ' ', etf_name).strip()
+                    etf_name = re.sub(r'^[^\w]+|[^\w]+$', '', etf_name).strip()
+                    
+                    # 너무 짧거나 Form 타입만 있으면 제외
+                    if len(etf_name) < 5 or etf_name.upper() == form_type:
+                        etf_name = None
+                
+                # 최종 Filing 객체 생성
+                if etf_name:  # ETF 이름이 있는 경우만 포함
+                    filing = {
+                        "etf_name": etf_name,
+                        "filing_type": form_type,
+                        "filing_date": filing_date,
+                        "url": link
+                    }
+                    filings.append(filing)
+                    logger.info(f"발견: {etf_name} ({form_type})")
                 
             except Exception as e:
                 logger.error(f"엔트리 파싱 오류: {str(e)}")
@@ -195,43 +275,6 @@ def get_filings_by_form(form_type):
         logger.error(f"{form_type} RSS 처리 오류: {str(e)}")
         return []
 
-def parse_filing_title(title, summary):
-    """Filing 제목에서 회사명과 ETF 이름 추출"""
-    # HTML 엔티티 제거
-    title = unescape(title)
-    summary = unescape(summary)
-    
-    # 기본값
-    company = "Unknown"
-    etf_name = "ETF Registration"
-    
-    # 패턴 1: "회사명 - ETF 이름 - Form Type"
-    match = re.search(r'^([^-–—]+?)\s*[-–—]\s*([^-–—]+?)(?:\s*[-–—]\s*(?:Form\s+)?[\w/]+)?$', title)
-    if match:
-        company = match.group(1).strip()
-        potential_name = match.group(2).strip()
-        
-        # Form 타입 제거
-        potential_name = re.sub(r'\(?\s*Form\s+[\w/]+\s*\)?$', '', potential_name).strip()
-        potential_name = re.sub(r'^\s*Form\s+[\w/]+\s*', '', potential_name).strip()
-        
-        if potential_name and len(potential_name) > 3:
-            etf_name = potential_name
-    
-    # 패턴 2: Summary에서 ETF 이름 찾기
-    if etf_name == "ETF Registration" and summary:
-        etf_match = re.search(r'([A-Za-z][A-Za-z\s&]+(?:ETF|Exchange[- ]Traded Fund?|Fund|Trust))', summary, re.IGNORECASE)
-        if etf_match:
-            etf_name = etf_match.group(1).strip()
-    
-    # 회사명 정리
-    company = re.sub(r'\s+(?:Inc\.?|Corp\.?|LLC|LP|Ltd\.?|Trust|Funds?)\.?$', '', company, flags=re.IGNORECASE).strip()
-    
-    # ETF 이름 정리
-    etf_name = re.sub(r'\s+', ' ', etf_name).strip()
-    
-    return company, etf_name
-
 def format_etf_report(filings):
     """간결한 ETF 리포트 포맷"""
     korean_time = get_korean_time()
@@ -239,45 +282,23 @@ def format_etf_report(filings):
     
     report = f"""📊 <b>SEC ETF 신규 상장신청</b>
 ━━━━━━━━━━━━━━━━━
-📅 {yesterday} ~ {today} (미국)
-🕐 {korean_time.strftime('%H:%M')} KST
+📅 {yesterday} (미국) | {korean_time.strftime('%H:%M')} KST
 
 """
     
     if not filings:
         report += """⚠️ 신규 상장신청 없음
 
-최근 2일간 ETF 신규 상장신청이 없습니다."""
+ETF 신규 상장신청이 없습니다."""
     else:
         report += f"""🆕 <b>신규 {len(filings)}건</b>
 
 """
-        # 날짜별 그룹화
-        by_date = {}
         for filing in filings:
-            date = filing['filing_date']
-            if date not in by_date:
-                by_date[date] = []
-            by_date[date].append(filing)
-        
-        for date in sorted(by_date.keys(), reverse=True):
-            if len(by_date) > 1:
-                report += f"<b>[{date}]</b>\n"
-            
-            for filing in by_date[date]:
-                # 표시할 이름 결정
-                if filing['etf_name'] != "ETF Registration":
-                    display = f"<b>{filing['company']}</b> - {filing['etf_name']}"
-                else:
-                    display = f"<b>{filing['company']}</b>"
-                
-                report += f"""• {display}
+            report += f"""• <b>{filing['etf_name']}</b>
   {filing['filing_type']} | <a href="{filing['url']}">SEC Filing →</a>
 
 """
-    
-    report += f"""━━━━━━━━━━━━━━━━━
-🔄 매일 오전 8시 발송"""
     
     return report
 
@@ -289,6 +310,17 @@ def home():
         "service": "SEC ETF Bot",
         "time": get_korean_time().isoformat()
     })
+
+@app.route('/test-telegram')
+def test_telegram():
+    """텔레그램 연결 테스트"""
+    test_message = f"""🔧 <b>텔레그램 연결 테스트</b>
+
+✅ 봇 연결 성공!
+⏰ 한국시간: {get_korean_time().strftime('%Y-%m-%d %H:%M:%S')}"""
+    
+    result = send_telegram_message(test_message)
+    return jsonify(result)
 
 @app.route('/etf-report')
 def send_etf_report():
@@ -311,7 +343,7 @@ def send_etf_report():
             "status": result["status"],
             "message": result["message"],
             "filings_count": len(filings),
-            "filings_detail": filings,  # 디버깅용
+            "filings": filings,  # 디버깅용
             "timestamp": get_korean_time().isoformat()
         })
         
@@ -324,28 +356,14 @@ def send_etf_report():
 
 @app.route('/test-sec-data')
 def test_sec_data():
-    """SEC 데이터 수집 테스트 (상세 정보)"""
+    """SEC 데이터 수집 테스트"""
     try:
-        logger.info("SEC 데이터 테스트 시작...")
-        
-        # 각 Form별 상세 수집
-        n1a = get_filings_by_form("N-1A")
-        apos = get_filings_by_form("485APOS")
-        bxt = get_filings_by_form("485BXT")
+        filings = get_all_etf_filings()
         
         return jsonify({
             "status": "success",
-            "summary": {
-                "N-1A": len(n1a),
-                "485APOS": len(apos),
-                "485BXT": len(bxt),
-                "total": len(n1a) + len(apos) + len(bxt)
-            },
-            "details": {
-                "N-1A": n1a[:3],  # 처음 3개만
-                "485APOS": apos[:3],
-                "485BXT": bxt[:3]
-            },
+            "total": len(filings),
+            "filings": filings,
             "date_range": get_date_range(),
             "timestamp": get_korean_time().isoformat()
         })
