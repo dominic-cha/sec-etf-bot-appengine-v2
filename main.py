@@ -336,7 +336,7 @@ def format_etf_report(filings):
     yesterday = get_yesterday_date()
     
     report = f"""<b>SEC ETF 신규 상장신청</b>
------------------
+───────────────────
 📅 {yesterday} (미국) | {korean_time.strftime('%H:%M')} KST
 
 """
