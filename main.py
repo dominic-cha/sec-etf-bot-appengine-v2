@@ -6,6 +6,7 @@ from flask import Flask, jsonify, request
 import logging
 import re
 from html import unescape
+import urllib.parse
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +22,7 @@ CHAT_ID = os.environ.get('CHAT_ID')
 KST = timezone(timedelta(hours=9))
 EST = timezone(timedelta(hours=-5))
 
-# 신규 ETF Form Types만 (3개)
+# 신규 ETF Form Types만
 ETF_FORMS = ['485APOS', '485BPOS', 'N-1A']
 
 def get_korean_time():
@@ -62,162 +63,190 @@ def send_telegram_message(message):
         logger.error(f"❌ 전송 오류: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-def extract_etf_name_from_filing(filing_url):
-    """Filing 문서에서 ETF 이름 추출"""
-    try:
-        # Filing 페이지 접근
-        headers = {
-            'User-Agent': 'SEC ETF Monitor Bot/1.0 (admin@example.com)',
-            'Accept': 'text/html'
-        }
-        
-        response = requests.get(filing_url, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            content = response.text
-            
-            # ETF 이름 패턴들
-            patterns = [
-                # Series Name 패턴
-                r'Series Name[:\s]*</[^>]+>\s*<[^>]+>([^<]+ETF[^<]*)',
-                r'Name of Fund[:\s]*</[^>]+>\s*<[^>]+>([^<]+ETF[^<]*)',
-                r'Fund Name[:\s]*</[^>]+>\s*<[^>]+>([^<]+ETF[^<]*)',
-                # 테이블에서 찾기
-                r'<td[^>]*>([^<]+ETF[^<]*)</td>',
-                # 제목에서 찾기
-                r'<title>([^<]+ETF[^<]*)</title>',
-                # Bold 텍스트에서
-                r'<b>([^<]+ETF[^<]*)</b>',
-                r'<strong>([^<]+ETF[^<]*)</strong>',
-                # 일반 텍스트
-                r'>([A-Z][A-Za-z0-9\s&\-\.]+ETF[A-Za-z0-9\s]*)<'
-            ]
-            
-            for pattern in patterns:
-                matches = re.findall(pattern, content, re.IGNORECASE)
-                if matches:
-                    # 가장 적절한 ETF 이름 선택
-                    for match in matches:
-                        etf_name = unescape(match).strip()
-                        # 너무 길거나 이상한 것 제외
-                        if 5 < len(etf_name) < 100 and 'ETF' in etf_name.upper():
-                            # HTML 태그 제거
-                            etf_name = re.sub(r'<[^>]+>', '', etf_name)
-                            etf_name = re.sub(r'\s+', ' ', etf_name).strip()
-                            return etf_name
-            
-            logger.debug(f"ETF 이름을 찾을 수 없음: {filing_url}")
-            
-    except Exception as e:
-        logger.error(f"Filing 페이지 접근 오류: {str(e)[:100]}")
-    
-    return None
-
-def get_daily_index_filings():
-    """SEC Daily Index에서 ETF Filing 가져오기"""
+def get_edgar_search_results():
+    """EDGAR Search를 통한 직접 검색"""
     all_filings = []
     
     try:
-        yesterday = get_yesterday_date()
+        # EDGAR Search API 사용
+        base_url = "https://efts.sec.gov/LATEST/search-index"
         
-        # 최근 3일 확인
-        for days_back in range(3):
-            check_date = yesterday - timedelta(days=days_back)
-            
-            # Daily Index JSON URL
-            year = check_date.strftime('%Y')
-            quarter = f"QTR{(check_date.month-1)//3 + 1}"
-            date_str = check_date.strftime('%Y%m%d')
-            
-            index_url = f"https://www.sec.gov/Archives/edgar/daily-index/{year}/{quarter}/master.{date_str}.json"
-            
-            logger.info(f"Daily Index 조회: {date_str}")
-            
-            headers = {
-                'User-Agent': 'SEC ETF Monitor Bot/1.0 (admin@example.com)',
-                'Accept': 'application/json'
-            }
-            
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Origin': 'https://www.sec.gov',
+            'Referer': 'https://www.sec.gov/'
+        }
+        
+        # 각 Form Type별로 검색
+        for form_type in ETF_FORMS:
             try:
-                response = requests.get(index_url, headers=headers, timeout=20)
+                # 검색 파라미터
+                payload = {
+                    "q": "",
+                    "dateRange": "custom",
+                    "startdt": (datetime.now(EST) - timedelta(days=7)).strftime("%Y-%m-%d"),
+                    "enddt": datetime.now(EST).strftime("%Y-%m-%d"),
+                    "forms": [form_type],
+                    "page": "1",
+                    "from": 0,
+                    "size": 100,
+                    "sort": [{"filedAt": {"order": "desc"}}]
+                }
+                
+                logger.info(f"EDGAR Search: {form_type}")
+                
+                response = requests.post(
+                    base_url, 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=20
+                )
                 
                 if response.status_code == 200:
                     data = response.json()
+                    hits = data.get('hits', {}).get('hits', [])
                     
-                    # Filing 정보 파싱
-                    for item in data.get('item', []):
-                        form_type = item.get('type', '').upper()
+                    for hit in hits:
+                        source = hit.get('_source', {})
                         
-                        # 3개 Form Type만 체크
-                        if any(etf_form in form_type for etf_form in ETF_FORMS):
-                            # Amendment 제외 (/A)
-                            if '/A' not in form_type:
-                                
-                                company_name = item.get('company', 'Unknown')
-                                cik = item.get('cik', '')
-                                date_filed = item.get('date', check_date.strftime('%Y-%m-%d'))
-                                
-                                # Filing URL 생성
-                                accession = item.get('accession', '').replace('.txt', '')
-                                if accession:
-                                    filing_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace('-', '')}/{accession}-index.htm"
-                                    
-                                    # Filing 페이지에서 실제 ETF 이름 추출 시도
-                                    etf_name = extract_etf_name_from_filing(filing_url)
-                                    
-                                    # 못 찾으면 회사명에서 추출
-                                    if not etf_name:
-                                        etf_name = extract_etf_name_from_company(company_name)
-                                else:
-                                    filing_url = "#"
-                                    etf_name = extract_etf_name_from_company(company_name)
-                                
-                                filing = {
-                                    "etf_name": etf_name,
-                                    "filing_type": form_type,
-                                    "filing_date": date_filed,
-                                    "url": filing_url,
-                                    "company": company_name
-                                }
-                                
-                                all_filings.append(filing)
-                                logger.info(f"✅ 발견: {etf_name} ({form_type})")
-                                
-            except Exception as e:
-                logger.error(f"Index 조회 실패 {date_str}: {str(e)[:100]}")
-                continue
+                        # Filing 정보 추출
+                        company_name = source.get('display_names', ['Unknown'])[0]
+                        filing_date = source.get('file_date', '')
+                        form = source.get('file_type', form_type)
+                        cik = source.get('ciks', [''])[0]
+                        file_num = source.get('file_num', '')
+                        accession = source.get('accession_number', '')
+                        
+                        # URL 생성
+                        if accession and cik:
+                            filing_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace('-', '')}/{accession}-index.htm"
+                        else:
+                            filing_url = "#"
+                        
+                        # ETF 관련인지 체크
+                        if 'ETF' in company_name.upper() or 'EXCHANGE' in company_name.upper() or 'FUND' in company_name.upper():
+                            etf_name = extract_etf_name_from_text(company_name)
+                            
+                            filing = {
+                                "etf_name": etf_name,
+                                "filing_type": form,
+                                "filing_date": filing_date,
+                                "url": filing_url,
+                                "company": company_name
+                            }
+                            
+                            all_filings.append(filing)
+                            logger.info(f"✅ 발견: {etf_name} ({form})")
                 
+                else:
+                    logger.error(f"Search API 응답 오류: {response.status_code}")
+                    
+            except Exception as e:
+                logger.error(f"{form_type} 검색 오류: {str(e)[:100]}")
+                continue
+        
     except Exception as e:
-        logger.error(f"Daily Index 오류: {str(e)}")
+        logger.error(f"EDGAR Search 오류: {str(e)}")
     
-    # 중복 제거
-    unique_filings = []
-    seen_urls = set()
-    for f in all_filings:
-        if f['url'] not in seen_urls:
-            seen_urls.add(f['url'])
-            unique_filings.append(f)
+    # 백업: Latest Filings 페이지 직접 파싱
+    if not all_filings:
+        logger.info("EDGAR Search 실패, Latest Filings 시도...")
+        all_filings = scrape_latest_filings()
     
-    return unique_filings
+    return all_filings
 
-def extract_etf_name_from_company(company_name):
-    """회사명에서 ETF 이름 추출 (백업)"""
+def scrape_latest_filings():
+    """Latest Filings 페이지 직접 스크래핑"""
+    filings = []
+    
+    try:
+        # Latest Filings 페이지
+        url = "https://www.sec.gov/cgi-bin/browse-edgar"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml'
+        }
+        
+        # 각 Form Type별로 조회
+        for form_type in ETF_FORMS:
+            params = {
+                'action': 'getcurrent',
+                'type': form_type,
+                'company': '',
+                'dateb': '',
+                'owner': 'include',
+                'start': '0',
+                'count': '100',
+                'output': 'atom'
+            }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=20)
+            
+            if response.status_code == 200:
+                # HTML/XML 파싱
+                content = response.text
+                
+                # Entry 찾기
+                entries = re.findall(r'<entry>(.*?)</entry>', content, re.DOTALL)
+                
+                for entry in entries:
+                    # 정보 추출
+                    title_match = re.search(r'<title>(.*?)</title>', entry)
+                    link_match = re.search(r'<link[^>]*href="([^"]+)"', entry)
+                    updated_match = re.search(r'<updated>(.*?)</updated>', entry)
+                    
+                    if title_match and link_match:
+                        title = unescape(title_match.group(1))
+                        link = link_match.group(1)
+                        date = updated_match.group(1)[:10] if updated_match else get_yesterday_date().strftime('%Y-%m-%d')
+                        
+                        # ETF 관련 체크
+                        if any(keyword in title.upper() for keyword in ['ETF', 'EXCHANGE', 'FUND', 'TRUST']):
+                            etf_name = extract_etf_name_from_text(title)
+                            
+                            filing = {
+                                "etf_name": etf_name,
+                                "filing_type": form_type,
+                                "filing_date": date,
+                                "url": link if link.startswith('http') else f"https://www.sec.gov{link}"
+                            }
+                            
+                            filings.append(filing)
+                            logger.info(f"Latest Filing: {etf_name}")
+            
+    except Exception as e:
+        logger.error(f"Latest Filings 스크래핑 오류: {str(e)}")
+    
+    return filings
+
+def extract_etf_name_from_text(text):
+    """텍스트에서 ETF 이름 추출"""
     # 정리
-    name = company_name
-    name = re.sub(r'\(Filer\)', '', name)
-    name = re.sub(r'\(\d{10}\)', '', name)  # CIK 제거
+    text = unescape(text)
+    text = re.sub(r'\([0-9]{10}\)', '', text)  # CIK 제거
+    text = re.sub(r'\(Filer\)', '', text)
+    text = re.sub(r'Form\s+[\w/-]+', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*[-–—]\s*', ' - ', text)
     
-    # ETF가 포함된 경우
-    if 'ETF' in name.upper():
-        match = re.search(r'([A-Za-z][A-Za-z0-9\s&\-\.]*ETF[A-Za-z0-9\s]*)', name, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
+    # ETF 패턴 찾기
+    etf_match = re.search(r'([A-Za-z][A-Za-z0-9\s&\-\.]*(?:ETF|Fund|Trust)[A-Za-z0-9\s]*)', text, re.IGNORECASE)
+    if etf_match:
+        name = etf_match.group(1).strip()
+        name = re.sub(r'\s+', ' ', name)
+        if len(name) > 5:
+            return name[:80]
     
-    # Trust, Fund 등
-    if any(word in name.upper() for word in ['TRUST', 'FUND', 'SERIES']):
-        return name.strip()[:60]
+    # 첫 부분 사용
+    parts = text.split('-')
+    if parts:
+        name = parts[0].strip()
+        if len(name) > 5:
+            return name[:80]
     
-    return name.split('-')[0].strip()[:60]
+    return "ETF Filing"
 
 def format_etf_report(filings):
     """리포트 포맷"""
@@ -235,33 +264,31 @@ def format_etf_report(filings):
 
 어제는 ETF 신규 상장신청이 없었습니다.
 
-📌 Form Types: 485APOS, 485BPOS, N-1A"""
+📌 Form Types: 485APOS, 485BPOS, N-1A
+💡 데이터 소스: SEC EDGAR"""
     else:
-        # 어제 날짜만 필터
+        # 날짜별 필터링
         yesterday_filings = [f for f in filings if yesterday in f.get('filing_date', '')]
         
+        # 어제 것이 없으면 최근 7일
         if not yesterday_filings:
-            # 최근 3일 중 최신
-            yesterday_filings = filings[:10]
-            report += f"""📌 최근 3일간 Filing:
+            recent_filings = filings[:15]  # 최대 15개
+            if recent_filings:
+                report += f"""📌 최근 7일간 Filing ({len(filings)}건):
+
+"""
+                for filing in recent_filings:
+                    report += f"""  • <b>{filing['etf_name']}</b>
+    {filing['filing_type']} | {filing['filing_date']} | <a href="{filing['url']}">SEC →</a>
 
 """
         else:
             report += f"""🆕 <b>신규 {len(yesterday_filings)}건</b>
 
 """
-        
-        for filing in yesterday_filings:
-            # ETF 이름 표시
-            display_name = filing['etf_name']
-            
-            # 회사명이 다르고 ETF 이름이 일반적이면 회사명도 표시
-            if filing.get('company') and filing['company'] != filing['etf_name']:
-                if len(filing['etf_name']) < 20:  # 짧은 이름이면
-                    display_name = f"{filing['company']} - {filing['etf_name']}"
-            
-            report += f"""  • <b>{display_name}</b>
-    {filing['filing_type']} | {filing['filing_date']} | <a href="{filing['url']}">SEC →</a>
+            for filing in yesterday_filings:
+                report += f"""  • <b>{filing['etf_name']}</b>
+    {filing['filing_type']} | <a href="{filing['url']}">SEC →</a>
 
 """
     
@@ -273,7 +300,7 @@ def home():
         "status": "healthy",
         "service": "SEC ETF Bot",
         "time": get_korean_time().isoformat(),
-        "forms_tracked": ETF_FORMS
+        "forms": ETF_FORMS
     })
 
 @app.route('/etf-report')
@@ -282,10 +309,9 @@ def send_etf_report():
     try:
         logger.info("="*50)
         logger.info(f"리포트 생성: {get_korean_time()}")
-        logger.info(f"추적 Form Types: {ETF_FORMS}")
         
         # Filing 수집
-        filings = get_daily_index_filings()
+        filings = get_edgar_search_results()
         logger.info(f"수집 완료: {len(filings)}개")
         
         # 리포트 생성 및 전송
@@ -295,13 +321,24 @@ def send_etf_report():
         return jsonify({
             "status": "success",
             "total": len(filings),
-            "yesterday": get_yesterday_date().strftime('%Y-%m-%d'),
-            "forms_tracked": ETF_FORMS,
+            "forms": ETF_FORMS,
             "filings": filings[:10]
         })
         
     except Exception as e:
         logger.error(f"오류: {str(e)}")
+        
+        # 오류 메시지도 전송
+        error_report = f"""<b>SEC ETF 신규 상장신청</b>
+───────────────────
+📅 {get_yesterday_date().strftime('%Y-%m-%d')} (미국) | {get_korean_time().strftime('%H:%M')} KST
+
+❌ 데이터 수집 오류
+
+시스템 점검이 필요합니다."""
+        
+        send_telegram_message(error_report)
+        
         return jsonify({
             "status": "error",
             "message": str(e)
@@ -311,7 +348,7 @@ def send_etf_report():
 def test_sec_data():
     """데이터 테스트"""
     try:
-        filings = get_daily_index_filings()
+        filings = get_edgar_search_results()
         
         # 날짜별 그룹
         by_date = {}
@@ -319,33 +356,26 @@ def test_sec_data():
             date = f.get('filing_date', 'unknown')
             if date not in by_date:
                 by_date[date] = []
-            by_date[date].append({
-                "name": f['etf_name'],
-                "type": f['filing_type']
-            })
-        
-        # Form별 집계
-        by_form = {}
-        for f in filings:
-            form = f['filing_type']
-            if form not in by_form:
-                by_form[form] = 0
-            by_form[form] += 1
+            by_date[date].append(f['etf_name'])
         
         return jsonify({
             "status": "success",
             "total": len(filings),
             "yesterday": get_yesterday_date().strftime('%Y-%m-%d'),
-            "forms_tracked": ETF_FORMS,
+            "forms": ETF_FORMS,
             "by_date": by_date,
-            "by_form": by_form,
-            "all_filings": filings
+            "filings": filings,
+            "test_urls": [
+                "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=485APOS",
+                "https://efts.sec.gov/LATEST/search-index"
+            ]
         })
         
     except Exception as e:
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "forms": ETF_FORMS
         }), 500
 
 if __name__ == '__main__':
