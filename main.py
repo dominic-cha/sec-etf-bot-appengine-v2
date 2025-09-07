@@ -86,7 +86,7 @@ def get_edgar_search_results():
                 payload = {
                     "q": "",
                     "dateRange": "custom",
-                    "startdt": (datetime.now(EST) - timedelta(days=7)).strftime("%Y-%m-%d"),
+                    "startdt": (datetime.now(EST) - timedelta(days=5)).strftime("%Y-%m-%d"),
                     "enddt": datetime.now(EST).strftime("%Y-%m-%d"),
                     "forms": [form_type],
                     "page": "1",
@@ -254,7 +254,7 @@ def format_etf_report(filings):
     yesterday = get_yesterday_date().strftime('%Y-%m-%d')
     
     report = f"""<b>SEC ETF 신규 상장신청</b>
-───────────────────
+──────────────
 📅 {yesterday} (미국) | {korean_time.strftime('%H:%M')} KST
 
 """
@@ -330,7 +330,7 @@ def send_etf_report():
         
         # 오류 메시지도 전송
         error_report = f"""<b>SEC ETF 신규 상장신청</b>
-───────────────────
+──────────────
 📅 {get_yesterday_date().strftime('%Y-%m-%d')} (미국) | {get_korean_time().strftime('%H:%M')} KST
 
 ❌ 데이터 수집 오류
